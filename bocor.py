@@ -3,7 +3,6 @@
 # run: python bocor.py
 
 import hashlib
-import time
 import requests
 from kodenik import lookup_nik as _kodenik_lookup
 from rich.console import Console
@@ -112,34 +111,13 @@ def xon_check_email(email: str):
         pass
     return None
 
-def xon_analytics(email: str) -> dict:
-    try:
-        r = requests.get(
-            f"https://api.xposedornot.com/v1/breach-analytics?email={email}",
-            headers={"User-Agent": "bocor-py/2.0"},
-            timeout=10,
-        )
-        if r.status_code == 200:
-            return r.json()
-    except Exception:
-        pass
-    return {}
-
 # ── LeakLookup ────────────────────────────────────────────────────────────────
 
 def leaklookup_check(query: str, search_type: str = "email_address") -> list:
-    """
-    search_type: email_address | username | password | domain | ip_address
-    Returns list of breach source names or [] if clean, None if error.
-    """
     try:
         r = requests.post(
             "https://leak-lookup.com/api/search",
-            data={
-                "key": LEAKLOOKUP_KEY,
-                "type": search_type,
-                "query": query,
-            },
+            data={"key": LEAKLOOKUP_KEY, "type": search_type, "query": query},
             timeout=15,
         )
         if r.status_code == 200:
@@ -149,7 +127,6 @@ def leaklookup_check(query: str, search_type: str = "email_address") -> list:
                 if isinstance(results, dict):
                     return list(results.keys())
                 return []
-            # quota hit or bad key
             return []
     except Exception:
         pass
@@ -158,7 +135,6 @@ def leaklookup_check(query: str, search_type: str = "email_address") -> list:
 # ── LeakCheck ─────────────────────────────────────────────────────────────────
 
 def leakcheck_check(query: str) -> list:
-    """Free public endpoint — no key needed. Returns list of source names."""
     try:
         r = requests.get(
             f"https://leakcheck.io/api/public?check={query}",
@@ -178,7 +154,6 @@ def leakcheck_check(query: str) -> list:
 # ── HIBP password k-anonymity ─────────────────────────────────────────────────
 
 def hibp_password_check(password: str) -> int:
-    """Returns count of times password appeared in breaches. 0 = clean."""
     sha1 = hashlib.sha1(password.encode("utf-8")).hexdigest().upper()
     prefix, suffix = sha1[:5], sha1[5:]
     try:
@@ -199,10 +174,6 @@ def hibp_password_check(password: str) -> int:
 # ── AbstractAPI phone breach ──────────────────────────────────────────────────
 
 def abstract_phone_check(phone: str) -> dict:
-    """
-    Returns dict with breach info or empty dict.
-    phone format: 628XXXXXXXXX (internasional, tanpa +)
-    """
     try:
         r = requests.get(
             "https://phoneintelligence.abstractapi.com/v1/",
@@ -216,7 +187,6 @@ def abstract_phone_check(phone: str) -> dict:
     return {}
 
 def format_phone_id(phone: str) -> str:
-    """Normalize Indonesian phone number to international format."""
     phone = phone.strip().replace(" ", "").replace("-", "")
     if phone.startswith("0"):
         phone = "62" + phone[1:]
@@ -227,7 +197,6 @@ def format_phone_id(phone: str) -> str:
 # ── display email results ─────────────────────────────────────────────────────
 
 def merge_breach_names(xon: list, ll: list, lc: list) -> list:
-    """Merge breach names from multiple sources, deduplicated."""
     seen = set()
     merged = []
     for name in (xon or []) + (ll or []) + (lc or []):
@@ -238,16 +207,11 @@ def merge_breach_names(xon: list, ll: list, lc: list) -> list:
     return merged
 
 def display_email_results(email: str, breach_names: list):
-    console.print()
+    # kalau kosong — diam, tidak tampilkan apa-apa
     if not breach_names:
-        console.print(Align.center(
-            Panel(
-                Align.center(Text("✅  Tidak ditemukan di breach manapun", style="bold green")),
-                border_style="green", padding=(1, 4), width=60
-            )
-        ))
         return
 
+    console.print()
     total = len(breach_names)
     summary = Text(justify="center")
     summary.append(f"⚠️  {email}\n", style="bold white")
@@ -260,11 +224,8 @@ def display_email_results(email: str, breach_names: list):
     console.print()
 
     table = Table(
-        box=box.ROUNDED,
-        border_style="bright_cyan",
-        header_style="bold cyan",
-        show_lines=True,
-        expand=True,
+        box=box.ROUNDED, border_style="bright_cyan", header_style="bold cyan",
+        show_lines=True, expand=True,
     )
     table.add_column("Breach", style="bold white", min_width=18)
     table.add_column("Tahun", justify="center", min_width=6)
@@ -274,11 +235,7 @@ def display_email_results(email: str, breach_names: list):
 
     for name in breach_names:
         meta = get_hibp_meta(name)
-
-        year = "—"
-        if meta.get("BreachDate"):
-            year = meta["BreachDate"][:4]
-
+        year = meta.get("BreachDate", "")[:4] if meta.get("BreachDate") else "—"
         pwn_count = "—"
         if meta.get("PwnCount"):
             c = meta["PwnCount"]
@@ -302,8 +259,7 @@ def display_email_results(email: str, breach_names: list):
             fields_text.append("tidak diketahui", style="dim white")
 
         sev_label, sev_style = severity(data_classes)
-        sev_text = Text(sev_label, style=sev_style)
-        table.add_row(name, year, pwn_count, fields_text, sev_text)
+        table.add_row(name, year, pwn_count, fields_text, Text(sev_label, style=sev_style))
 
     console.print(table)
     console.print()
@@ -312,102 +268,66 @@ def display_email_results(email: str, breach_names: list):
     tips.append("Ganti password di semua akun yang terdampak. Aktifkan 2FA.", style="white")
     console.print(Align.center(tips))
 
-# ── check email (multi-source) ────────────────────────────────────────────────
+# ── check email ───────────────────────────────────────────────────────────────
 
 def check_email(email: str):
-    console.print(f"\n[dim]🔍 XposedOrNot...[/dim]")
     xon = xon_check_email(email)
+    ll  = leaklookup_check(email, "email_address")
+    lc  = leakcheck_check(email)
 
-    console.print(f"[dim]🔍 LeakLookup...[/dim]")
-    ll = leaklookup_check(email, "email_address")
-
-    console.print(f"[dim]🔍 LeakCheck...[/dim]")
-    lc = leakcheck_check(email)
-
-    merged = merge_breach_names(
-        xon if xon else [],
-        ll if ll else [],
-        lc if lc else [],
-    )
-
-    # source status
-    src_line = Text()
-    src_line.append("Sumber: ", style="dim white")
-    src_line.append("XON ", style="green" if xon is not None else "red")
-    src_line.append("LeakLookup ", style="green" if ll is not None else "red")
-    src_line.append("LeakCheck", style="green" if lc is not None else "red")
-    console.print(Align.center(src_line))
-
+    merged = merge_breach_names(xon or [], ll or [], lc or [])
     display_email_results(email, merged)
 
-# ── check username (multi-source) ─────────────────────────────────────────────
+# ── check username ────────────────────────────────────────────────────────────
 
 def check_username(username: str):
-    console.print(f"\n[dim]🔍 XposedOrNot...[/dim]")
-    xon = xon_check_email(username)  # XON supports username too
+    xon = xon_check_email(username)
+    ll  = leaklookup_check(username, "username")
+    lc  = leakcheck_check(username)
 
-    console.print(f"[dim]🔍 LeakLookup...[/dim]")
-    ll = leaklookup_check(username, "username")
+    merged = merge_breach_names(xon or [], ll or [], lc or [])
 
-    console.print(f"[dim]🔍 LeakCheck...[/dim]")
-    lc = leakcheck_check(username)
-
-    merged = merge_breach_names(
-        xon if xon else [],
-        ll if ll else [],
-        lc if lc else [],
-    )
+    # kalau kosong — diam
+    if not merged:
+        return
 
     console.print()
-    if not merged:
-        console.print(Align.center(
-            Panel(
-                Align.center(Text(f"✅  Username '{username}' tidak ditemukan di breach manapun", style="bold green")),
-                border_style="green", padding=(1, 4), width=60
-            )
-        ))
-    else:
-        total = len(merged)
-        console.print(Align.center(
-            Panel(
-                Align.center(Text(f"⚠️  Username '{username}' ditemukan di {total} breach: {', '.join(merged)}", style="bold red")),
-                border_style="red", padding=(1, 4), width=72
-            )
-        ))
+    total = len(merged)
+    console.print(Align.center(
+        Panel(
+            Align.center(Text(
+                f"⚠️  Username '{username}' ditemukan di {total} breach: {', '.join(merged)}",
+                style="bold red"
+            )),
+            border_style="red", padding=(1, 4), width=72
+        )
+    ))
 
 # ── check phone ───────────────────────────────────────────────────────────────
 
 def check_phone(phone: str):
     normalized = format_phone_id(phone)
-    console.print(f"\n[dim]🔍 AbstractAPI Phone Intelligence ({normalized})...[/dim]")
-
     data = abstract_phone_check(normalized)
-    console.print()
 
+    # kalau gagal — diam, tidak tampilkan apa-apa
     if not data:
-        console.print(Panel(
-            Text("⚠️  Gagal terhubung ke AbstractAPI. Cek koneksi atau API key.", style="bold red"),
-            border_style="red", padding=(1, 2)
-        ))
         return
 
-    table = Table(box=box.ROUNDED, border_style="bright_cyan", header_style="bold cyan", show_lines=True, expand=True)
+    console.print()
+    table = Table(box=box.ROUNDED, border_style="bright_cyan",
+                  header_style="bold cyan", show_lines=True, expand=True)
     table.add_column("Field", style="bold white", min_width=22)
     table.add_column("Info", min_width=36)
 
-    # basic info
-    phone_obj = data.get("phone", {})
-    valid = data.get("valid", False)
     carrier = data.get("carrier", {})
     country = data.get("country", {})
 
     table.add_row("Nomor (E.164)", f"+{normalized}")
-    table.add_row("Valid", "✅ Ya" if valid else "❌ Tidak")
+    table.add_row("Valid", "✅ Ya" if data.get("valid") else "❌ Tidak")
     table.add_row("Negara", country.get("name", "—") if isinstance(country, dict) else str(country))
     table.add_row("Operator", carrier.get("name", "—") if isinstance(carrier, dict) else str(carrier))
     table.add_row("Tipe", data.get("type", "—"))
 
-    # breach info
     breaches = data.get("phone_breaches", {})
     total_breaches = breaches.get("total_breaches", 0) if isinstance(breaches, dict) else 0
 
@@ -430,10 +350,7 @@ def check_phone(phone: str):
             if len(breached_domains) > 8:
                 domains_text.append(f" +{len(breached_domains)-8} lagi", style="dim white")
             table.add_row("Domain Bocor", domains_text)
-    else:
-        table.add_row("Breach", Text("✅ Tidak ditemukan", style="bold green"))
 
-    # risk
     risk = data.get("phone_risk", {})
     if isinstance(risk, dict) and risk:
         table.add_row("Spam/Abuse", "⚠️ Terdeteksi" if risk.get("is_abuse_detected") else "✅ Bersih")
@@ -444,34 +361,26 @@ def check_phone(phone: str):
 # ── check password ────────────────────────────────────────────────────────────
 
 def check_password(password: str):
-    console.print(f"\n[dim]🔍 HIBP Pwned Passwords (k-anonymity)...[/dim]")
     count = hibp_password_check(password)
-    console.print()
 
+    # gagal konek — diam
     if count == -1:
-        console.print(Panel(
-            Text("⚠️  Gagal terhubung ke HIBP.", style="bold red"),
-            border_style="red", padding=(1, 2)
-        ))
-    elif count == 0:
-        console.print(Align.center(
-            Panel(
-                Align.center(Text("✅  Password tidak ditemukan di breach manapun", style="bold green")),
-                border_style="green", padding=(1, 4), width=60
-            )
-        ))
-    else:
-        console.print(Align.center(
-            Panel(
-                Align.center(Text(
-                    f"⚠️  Password ini muncul {count:,}x di breach yang diketahui!\n"
-                    f"Segera ganti password ini di semua akun.",
-                    style="bold red", justify="center"
-                )),
-                border_style="red", padding=(1, 4), width=72
-            )
-        ))
+        return
+    # bersih — diam
+    if count == 0:
+        return
 
+    console.print()
+    console.print(Align.center(
+        Panel(
+            Align.center(Text(
+                f"⚠️  Password ini muncul {count:,}x di breach yang diketahui!\n"
+                f"Segera ganti password ini di semua akun.",
+                style="bold red", justify="center"
+            )),
+            border_style="red", padding=(1, 4), width=72
+        )
+    ))
     console.print()
     console.print(Align.center(
         Text("🔒  Password tidak pernah dikirim utuh — hanya 5 karakter pertama hash SHA1", style="dim cyan")
@@ -480,7 +389,6 @@ def check_password(password: str):
 # ── check NIK ─────────────────────────────────────────────────────────────────
 
 def check_nik(nik: str):
-    """Parse NIK — wilayah via kodenik, tanggal/JK dari struktur NIK."""
     nik = nik.strip()
     console.print()
 
@@ -491,7 +399,6 @@ def check_nik(nik: str):
         ))
         return
 
-    # parse tanggal lahir & JK dari NIK
     tgl   = int(nik[6:8])
     bulan = nik[8:10]
     tahun = nik[10:12]
@@ -511,40 +418,28 @@ def check_nik(nik: str):
     tahun_int  = int(tahun)
     tahun_full = str(2000 + tahun_int) if tahun_int <= 24 else str(1900 + tahun_int)
 
-    # lookup wilayah via kodenik
-    console.print(f"[dim]🔍 Lookup wilayah via kodenik...[/dim]")
+    # lookup wilayah via kodenik — kalau gagal, diam (tidak tampilkan error)
     wilayah = None
     try:
         wilayah = _kodenik_lookup(nik)
     except Exception:
-        pass
+        wilayah = None
 
-    table = Table(box=box.ROUNDED, border_style="bright_cyan", header_style="bold cyan", show_lines=True, expand=True)
+    table = Table(box=box.ROUNDED, border_style="bright_cyan",
+                  header_style="bold cyan", show_lines=True, expand=True)
     table.add_column("Field", style="bold white", min_width=22)
     table.add_column("Info", min_width=36)
 
     table.add_row("NIK", nik)
 
+    # hanya nama wilayah — kode prov/kab/kec dihapus
     if wilayah:
-        table.add_row("Provinsi",
-            Text(wilayah.get("nama_provinsi", "—"), style="bold yellow"))
-        table.add_row("Kabupaten/Kota",
-            Text(wilayah.get("nama_kabkota", "—"), style="yellow"))
-        table.add_row("Kecamatan",
-            Text(wilayah.get("nama_kecamatan", "—"), style="yellow"))
-        table.add_row("Kode Provinsi",  wilayah.get("kode_provinsi", "—"))
-        table.add_row("Kode Kab/Kota",  wilayah.get("kode_kabkota", "—"))
-        table.add_row("Kode Kecamatan", wilayah.get("kode_kecamatan", "—"))
-    else:
-        table.add_row("Kode Provinsi",  nik[0:2])
-        table.add_row("Kode Kab/Kota",  nik[2:4])
-        table.add_row("Kode Kecamatan", nik[4:6])
-        table.add_row("Wilayah", Text("⚠️  Tidak ditemukan di database kodenik", style="dim yellow"))
+        table.add_row("Provinsi",        Text(wilayah.get("nama_provinsi", "—"),  style="bold yellow"))
+        table.add_row("Kabupaten/Kota",  Text(wilayah.get("nama_kabkota", "—"),   style="yellow"))
+        table.add_row("Kecamatan",       Text(wilayah.get("nama_kecamatan", "—"), style="yellow"))
 
-    table.add_row("Tanggal Lahir",
-        Text(f"{tgl_str} {bulan_str} {tahun_full}", style="bold white"))
-    table.add_row("Jenis Kelamin",
-        Text(jk, style="bold cyan"))
+    table.add_row("Tanggal Lahir", Text(f"{tgl_str} {bulan_str} {tahun_full}", style="bold white"))
+    table.add_row("Jenis Kelamin", Text(jk, style="bold cyan"))
     table.add_row("No. Urut", urut)
 
     console.print(table)
@@ -591,31 +486,21 @@ def main():
         if pilihan == "0":
             console.print("\n[dim]bye.[/dim]\n")
             break
-
         elif pilihan == "1":
             email = Prompt.ask("[bold white]Masukkan email[/bold white]").strip()
-            if email:
-                check_email(email)
-
+            if email: check_email(email)
         elif pilihan == "2":
             username = Prompt.ask("[bold white]Masukkan username[/bold white]").strip()
-            if username:
-                check_username(username)
-
+            if username: check_username(username)
         elif pilihan == "3":
             phone = Prompt.ask("[bold white]Masukkan No. HP (contoh: 08123456789)[/bold white]").strip()
-            if phone:
-                check_phone(phone)
-
+            if phone: check_phone(phone)
         elif pilihan == "4":
             nik = Prompt.ask("[bold white]Masukkan NIK (16 digit)[/bold white]").strip()
-            if nik:
-                check_nik(nik)
-
+            if nik: check_nik(nik)
         elif pilihan == "5":
             password = Prompt.ask("[bold white]Masukkan password[/bold white]", password=True).strip()
-            if password:
-                check_password(password)
+            if password: check_password(password)
 
         console.print()
         input("[dim]Tekan Enter untuk lanjut...[/dim]")

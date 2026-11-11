@@ -207,6 +207,56 @@ def format_phone_id(phone: str) -> str:
         phone = phone[1:]
     return phone
 
+# ── BPJS PASTI JKN ────────────────────────────────────────────────────────────
+
+def check_bpjs_pasti(nik: str, tgl_lahir_iso: str) -> dict:
+    """
+    nik: 16 digit
+    tgl_lahir_iso: YYYY-MM-DD (dari parse NIK)
+    Returns {"status": "aktif"|"nonaktif"|"tidak_ada", "nama": str|None}
+    """
+    result = {"status": "tidak_ada", "nama": None}
+    try:
+        s = requests.Session()
+        s.headers.update({
+            "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/124.0 Mobile Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Origin": "https://pasti.bpjs-kesehatan.go.id",
+            "Referer": "https://pasti.bpjs-kesehatan.go.id/cek",
+        })
+        s.get("https://pasti.bpjs-kesehatan.go.id/cek", timeout=10)
+
+        r = s.post(
+            "https://pasti.bpjs-kesehatan.go.id/api/cek-peserta",
+            json={"nik": nik, "tanggalLahir": tgl_lahir_iso},
+            timeout=15,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            nama = (
+                data.get("nama") or data.get("namaPeserta")
+                or data.get("data", {}).get("nama")
+                or data.get("peserta", {}).get("nama")
+            )
+            status_raw = (
+                data.get("status") or data.get("statusKepesertaan")
+                or data.get("data", {}).get("status")
+                or data.get("peserta", {}).get("status")
+            )
+            if nama:
+                result["nama"] = str(nama)
+            if status_raw:
+                st = str(status_raw).lower()
+                if "aktif" in st and "non" not in st and "tidak" not in st:
+                    result["status"] = "aktif"
+                elif "non" in st or "tidak" in st:
+                    result["status"] = "nonaktif"
+                else:
+                    result["status"] = st
+    except Exception:
+        pass
+    return result
+
 # ── display email results ─────────────────────────────────────────────────────
 
 def merge_breach_names(xon: list, ll: list, lc: list) -> list:
@@ -302,7 +352,6 @@ def check_email(email: str):
 
     merged = merge_breach_names(xon if xon else [], ll if ll else [], lc if lc else [])
 
-    # source status — HANYA tampil kalau salah satu sumber gagal (None)
     if xon is None or ll is None or lc is None:
         src_line = Text()
         src_line.append("Sumber: ", style="dim white")
@@ -481,7 +530,6 @@ def check_nik(nik: str):
     except Exception:
         wilayah = None
 
-    # kalau kodenik gagal (exception), sembunyikan kegagalan — tetap lanjut tanpa baris wilayah
     table = Table(box=box.ROUNDED, border_style="bright_cyan",
                   header_style="bold cyan", show_lines=True, expand=True)
     table.add_column("Field", style="bold white", min_width=22)
@@ -493,11 +541,25 @@ def check_nik(nik: str):
         table.add_row("Provinsi",       Text(wilayah.get("nama_provinsi", "—"),  style="bold yellow"))
         table.add_row("Kabupaten/Kota", Text(wilayah.get("nama_kabkota", "—"),   style="yellow"))
         table.add_row("Kecamatan",      Text(wilayah.get("nama_kecamatan", "—"), style="yellow"))
-    # kode prov/kab/kec & blok error wilayah: DIHAPUS sesuai permintaan
 
     table.add_row("Tanggal Lahir", Text(f"{tgl_str} {bulan_str} {tahun_full}", style="bold white"))
     table.add_row("Jenis Kelamin", Text(jk, style="bold cyan"))
     table.add_row("No. Urut", urut)
+
+    # ── BPJS PASTI JKN (pakai NIK + tanggal lahir dari parse) ──
+    tgl_iso = f"{tahun_full}-{bulan}-{tgl_str}"
+    console.print(f"[dim]🔍 BPJS PASTI JKN ({tgl_iso})...[/dim]")
+    bpjs = check_bpjs_pasti(nik, tgl_iso)
+
+    if bpjs["status"] in ("aktif", "nonaktif"):
+        style = "bold green" if bpjs["status"] == "aktif" else "bold red"
+        table.add_row("BPJS", Text(bpjs["status"].capitalize(), style=style))
+        if bpjs["nama"]:
+            table.add_row("Nama (BPJS)", Text(bpjs["nama"], style="bold white"))
+        else:
+            table.add_row("Nama (BPJS)", Text("—", style="dim white"))
+    else:
+        table.add_row("BPJS", Text("Database BPJS tidak ada atau tidak aktif", style="dim yellow"))
 
     console.print(table)
     console.print()
@@ -505,7 +567,7 @@ def check_nik(nik: str):
         Panel(
             Align.center(Text(
                 "⚠️  Tidak ada API publik untuk cek breach NIK.\n"
-                "Di atas adalah parse struktur NIK — bukan verifikasi ke Dukcapil.",
+                "Di atas adalah parse struktur NIK + BPJS PASTI JKN — bukan verifikasi Dukcapil.",
                 style="dim yellow", justify="center"
             )),
             border_style="yellow", padding=(1, 2), width=72

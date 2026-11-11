@@ -3,6 +3,7 @@
 # run: python bocor.py
 
 import hashlib
+import time
 import requests
 from kodenik import lookup_nik as _kodenik_lookup
 from rich.console import Console
@@ -207,12 +208,12 @@ def format_phone_id(phone: str) -> str:
         phone = phone[1:]
     return phone
 
-# ── BPJS PASTI JKN ────────────────────────────────────────────────────────────
+# ── BPJS PASTI JKN (single attempt) ──────────────────────────────────────────
 
 def check_bpjs_pasti(nik: str, tgl_lahir_iso: str) -> dict:
     """
     nik: 16 digit
-    tgl_lahir_iso: YYYY-MM-DD (dari parse NIK)
+    tgl_lahir_iso: YYYY-MM-DD
     Returns {"status": "aktif"|"nonaktif"|"tidak_ada", "nama": str|None}
     """
     result = {"status": "tidak_ada", "nama": None}
@@ -256,6 +257,25 @@ def check_bpjs_pasti(nik: str, tgl_lahir_iso: str) -> dict:
     except Exception:
         pass
     return result
+
+# ── BPJS PASTI JKN (multi-year brute: tetap → +1 → −1) ──────────────────────
+
+def check_bpjs_pasti_multi(nik: str, tgl: str, bulan: str, tahun: int) -> dict:
+    """
+    Coba 3 variasi tahun: tetap, +1, -1.
+    Return dict dengan tambahan "tahun_ketemu" kalau status aktif/nonaktif.
+    """
+    kandidat_tahun = [tahun, tahun + 1, tahun - 1]
+    for i, th in enumerate(kandidat_tahun):
+        tgl_iso = f"{th}-{bulan}-{tgl}"
+        console.print(f"[dim]🔍 BPJS PASTI JKN percobaan {i+1}/3 ({tgl_iso})...[/dim]")
+        res = check_bpjs_pasti(nik, tgl_iso)
+        if res["status"] in ("aktif", "nonaktif"):
+            res["tahun_ketemu"] = th
+            return res
+        if i < len(kandidat_tahun) - 1:
+            time.sleep(1.0)
+    return {"status": "tidak_ada", "nama": None, "tahun_ketemu": None}
 
 # ── display email results ─────────────────────────────────────────────────────
 
@@ -521,7 +541,7 @@ def check_nik(nik: str):
     tgl_str    = str(tgl_lahir).zfill(2)
     bulan_str  = bulan_map.get(bulan, bulan)
     tahun_int  = int(tahun)
-    tahun_full = str(2000 + tahun_int) if tahun_int <= 24 else str(1900 + tahun_int)
+    tahun_full = 2000 + tahun_int if tahun_int <= 24 else 1900 + tahun_int
 
     console.print(f"[dim]🔍 Lookup wilayah via kodenik...[/dim]")
     wilayah = None
@@ -546,18 +566,18 @@ def check_nik(nik: str):
     table.add_row("Jenis Kelamin", Text(jk, style="bold cyan"))
     table.add_row("No. Urut", urut)
 
-    # ── BPJS PASTI JKN (pakai NIK + tanggal lahir dari parse) ──
-    tgl_iso = f"{tahun_full}-{bulan}-{tgl_str}"
-    console.print(f"[dim]🔍 BPJS PASTI JKN ({tgl_iso})...[/dim]")
-    bpjs = check_bpjs_pasti(nik, tgl_iso)
+    # ── BPJS PASTI JKN — brute tahun: tetap → +1 → −1 ──
+    bpjs = check_bpjs_pasti_multi(nik, tgl_str, bulan, tahun_full)
 
     if bpjs["status"] in ("aktif", "nonaktif"):
         style = "bold green" if bpjs["status"] == "aktif" else "bold red"
         table.add_row("BPJS", Text(bpjs["status"].capitalize(), style=style))
-        if bpjs["nama"]:
+        if bpjs.get("nama"):
             table.add_row("Nama (BPJS)", Text(bpjs["nama"], style="bold white"))
         else:
             table.add_row("Nama (BPJS)", Text("—", style="dim white"))
+        if bpjs.get("tahun_ketemu") and bpjs["tahun_ketemu"] != tahun_full:
+            table.add_row("Tahun Ditemukan", Text(str(bpjs["tahun_ketemu"]), style="bold cyan"))
     else:
         table.add_row("BPJS", Text("Database BPJS tidak ada atau tidak aktif", style="dim yellow"))
 

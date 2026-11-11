@@ -1,10 +1,11 @@
 # lang: Python, file: bocor.py, target: Python 3.8+
-# deps: pip install rich requests
+# deps: pip install rich requests kodenik
 # run: python bocor.py
 
 import hashlib
 import time
 import requests
+from kodenik import lookup_nik as _kodenik_lookup
 from rich.console import Console
 from rich.text import Text
 from rich.panel import Panel
@@ -20,12 +21,12 @@ LEAKLOOKUP_KEY   = "083fa6d594bb3954ce7fb3f7adfc6fe3"
 ABSTRACTAPI_KEY  = "c602e4705c3e4dbd8acbe35d10a40da7"
 
 ASCII_ART = """
-█╗   ███╗██████╗     ██╗  ██╗ ██╗██╗  ██╗███╗   ██╗     ██╗██████╗ 
-████╗ ████║██╔══██╗    ██║  ██║███║██║  ██║████╗  ██║    ██╔╝██╔══██╗
-██╔████╔██║██████╔╝    ███████║╚██║███████║██╔██╗ ██║    ██║ ██║  ██║
-██║╚██╔╝██║██╔══██╗    ╚════██║ ██║╚════██║██║╚██╗██║    ██║ ██║  ██║
-██║ ╚═╝ ██║██║  ██║         ██║ ██║     ██║██║ ╚████║    ╚██╗██████╔╝
-╚═╝     ╚═╝╚═╝  ╚═╝         ╚═╝ ╚═╝     ╚═╝╚═╝  ╚═══╝     ╚═╝╚═════╝                                   
+███╗   ███╗██████╗ ██╗  ██╗ ██╗ ██╗  ███╗  ███╗       ██╗██████╗ 
+████╗ ████║██╔══██╗██║  ██║ ██║ ██║ ██╔██╗ ██╔██╗      ██║██╔══██╗
+██╔████╔██║██████╔╝███████║ ███████║██╔╝██╗██╔╝██╗     ██║██║  ██║
+██║╚██╔╝██║██╔══██╗╚════██║ ╚════██║██████╔╝██████╔╝   ██║██║  ██║
+██║ ╚═╝ ██║██║  ██║      ██║      ██║╚═██╔═╝╚═██╔═╝    ██║██████╔╝
+╚═╝     ╚═╝╚═╝  ╚═╝      ╚═╝      ╚═╝  ╚═╝    ╚═╝     ╚═╝╚═════╝ 
 """
 
 COLORS = ["red", "yellow", "green", "cyan", "blue", "magenta"]
@@ -479,7 +480,7 @@ def check_password(password: str):
 # ── check NIK ─────────────────────────────────────────────────────────────────
 
 def check_nik(nik: str):
-    """Parse NIK structure — tidak ada API publik untuk cek breach NIK."""
+    """Parse NIK — wilayah via kodenik, tanggal/JK dari struktur NIK."""
     nik = nik.strip()
     console.print()
 
@@ -490,39 +491,60 @@ def check_nik(nik: str):
         ))
         return
 
-    # parse NIK structure
-    prov_code  = nik[0:2]
-    kab_code   = nik[2:4]
-    kec_code   = nik[4:6]
-    tgl        = int(nik[6:8])
-    bulan      = nik[8:10]
-    tahun      = nik[10:12]
-    urut       = nik[12:16]
+    # parse tanggal lahir & JK dari NIK
+    tgl   = int(nik[6:8])
+    bulan = nik[8:10]
+    tahun = nik[10:12]
+    urut  = nik[12:16]
 
-    jk = "Perempuan" if tgl > 40 else "Laki-laki"
-    tgl_lahir  = tgl - 40 if tgl > 40 else tgl
+    jk        = "Perempuan" if tgl > 40 else "Laki-laki"
+    tgl_lahir = tgl - 40 if tgl > 40 else tgl
 
     bulan_map = {
-        "01":"Jan","02":"Feb","03":"Mar","04":"Apr",
-        "05":"Mei","06":"Jun","07":"Jul","08":"Agu",
-        "09":"Sep","10":"Okt","11":"Nov","12":"Des",
+        "01":"Januari","02":"Februari","03":"Maret","04":"April",
+        "05":"Mei","06":"Juni","07":"Juli","08":"Agustus",
+        "09":"September","10":"Oktober","11":"November","12":"Desember",
     }
 
-    tgl_str   = str(tgl_lahir).zfill(2)
-    bulan_str = bulan_map.get(bulan, bulan)
-    tahun_int = int(tahun)
+    tgl_str    = str(tgl_lahir).zfill(2)
+    bulan_str  = bulan_map.get(bulan, bulan)
+    tahun_int  = int(tahun)
     tahun_full = str(2000 + tahun_int) if tahun_int <= 24 else str(1900 + tahun_int)
 
-    table = Table(box=box.ROUNDED, border_style="bright_cyan", header_style="bold cyan", show_lines=True)
+    # lookup wilayah via kodenik
+    console.print(f"[dim]🔍 Lookup wilayah via kodenik...[/dim]")
+    wilayah = None
+    try:
+        wilayah = _kodenik_lookup(nik)
+    except Exception:
+        pass
+
+    table = Table(box=box.ROUNDED, border_style="bright_cyan", header_style="bold cyan", show_lines=True, expand=True)
     table.add_column("Field", style="bold white", min_width=22)
     table.add_column("Info", min_width=36)
 
     table.add_row("NIK", nik)
-    table.add_row("Kode Provinsi", prov_code)
-    table.add_row("Kode Kab/Kota", kab_code)
-    table.add_row("Kode Kecamatan", kec_code)
-    table.add_row("Tanggal Lahir", f"{tgl_str} {bulan_str} {tahun_full}")
-    table.add_row("Jenis Kelamin", jk)
+
+    if wilayah:
+        table.add_row("Provinsi",
+            Text(wilayah.get("nama_provinsi", "—"), style="bold yellow"))
+        table.add_row("Kabupaten/Kota",
+            Text(wilayah.get("nama_kabkota", "—"), style="yellow"))
+        table.add_row("Kecamatan",
+            Text(wilayah.get("nama_kecamatan", "—"), style="yellow"))
+        table.add_row("Kode Provinsi",  wilayah.get("kode_provinsi", "—"))
+        table.add_row("Kode Kab/Kota",  wilayah.get("kode_kabkota", "—"))
+        table.add_row("Kode Kecamatan", wilayah.get("kode_kecamatan", "—"))
+    else:
+        table.add_row("Kode Provinsi",  nik[0:2])
+        table.add_row("Kode Kab/Kota",  nik[2:4])
+        table.add_row("Kode Kecamatan", nik[4:6])
+        table.add_row("Wilayah", Text("⚠️  Tidak ditemukan di database kodenik", style="dim yellow"))
+
+    table.add_row("Tanggal Lahir",
+        Text(f"{tgl_str} {bulan_str} {tahun_full}", style="bold white"))
+    table.add_row("Jenis Kelamin",
+        Text(jk, style="bold cyan"))
     table.add_row("No. Urut", urut)
 
     console.print(table)
@@ -531,7 +553,7 @@ def check_nik(nik: str):
         Panel(
             Align.center(Text(
                 "⚠️  Tidak ada API publik untuk cek breach NIK.\n"
-                "Di atas hanya parse struktur NIK — bukan verifikasi ke Dukcapil.",
+                "Di atas adalah parse struktur NIK — bukan verifikasi ke Dukcapil.",
                 style="dim yellow", justify="center"
             )),
             border_style="yellow", padding=(1, 2), width=72

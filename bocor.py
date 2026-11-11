@@ -111,6 +111,19 @@ def xon_check_email(email: str):
         pass
     return None
 
+def xon_analytics(email: str) -> dict:
+    try:
+        r = requests.get(
+            f"https://api.xposedornot.com/v1/breach-analytics?email={email}",
+            headers={"User-Agent": "bocor-py/2.0"},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return {}
+
 # ── LeakLookup ────────────────────────────────────────────────────────────────
 
 def leaklookup_check(query: str, search_type: str = "email_address") -> list:
@@ -207,11 +220,16 @@ def merge_breach_names(xon: list, ll: list, lc: list) -> list:
     return merged
 
 def display_email_results(email: str, breach_names: list):
-    # kalau kosong — diam, tidak tampilkan apa-apa
+    console.print()
     if not breach_names:
+        console.print(Align.center(
+            Panel(
+                Align.center(Text("✅  Tidak ditemukan di breach manapun", style="bold green")),
+                border_style="green", padding=(1, 4), width=60
+            )
+        ))
         return
 
-    console.print()
     total = len(breach_names)
     summary = Text(justify="center")
     summary.append(f"⚠️  {email}\n", style="bold white")
@@ -235,7 +253,9 @@ def display_email_results(email: str, breach_names: list):
 
     for name in breach_names:
         meta = get_hibp_meta(name)
-        year = meta.get("BreachDate", "")[:4] if meta.get("BreachDate") else "—"
+        year = "—"
+        if meta.get("BreachDate"):
+            year = meta["BreachDate"][:4]
         pwn_count = "—"
         if meta.get("PwnCount"):
             c = meta["PwnCount"]
@@ -268,52 +288,78 @@ def display_email_results(email: str, breach_names: list):
     tips.append("Ganti password di semua akun yang terdampak. Aktifkan 2FA.", style="white")
     console.print(Align.center(tips))
 
-# ── check email ───────────────────────────────────────────────────────────────
+# ── check email (multi-source) ────────────────────────────────────────────────
 
 def check_email(email: str):
+    console.print(f"\n[dim]🔍 XposedOrNot...[/dim]")
     xon = xon_check_email(email)
-    ll  = leaklookup_check(email, "email_address")
-    lc  = leakcheck_check(email)
 
-    merged = merge_breach_names(xon or [], ll or [], lc or [])
+    console.print(f"[dim]🔍 LeakLookup...[/dim]")
+    ll = leaklookup_check(email, "email_address")
+
+    console.print(f"[dim]🔍 LeakCheck...[/dim]")
+    lc = leakcheck_check(email)
+
+    merged = merge_breach_names(xon if xon else [], ll if ll else [], lc if lc else [])
+
+    # source status — HANYA tampil kalau salah satu sumber gagal (None)
+    if xon is None or ll is None or lc is None:
+        src_line = Text()
+        src_line.append("Sumber: ", style="dim white")
+        src_line.append("XON ", style="green" if xon is not None else "red")
+        src_line.append("LeakLookup ", style="green" if ll is not None else "red")
+        src_line.append("LeakCheck", style="green" if lc is not None else "red")
+        console.print(Align.center(src_line))
+
     display_email_results(email, merged)
 
-# ── check username ────────────────────────────────────────────────────────────
+# ── check username (multi-source) ─────────────────────────────────────────────
 
 def check_username(username: str):
+    console.print(f"\n[dim]🔍 XposedOrNot...[/dim]")
     xon = xon_check_email(username)
-    ll  = leaklookup_check(username, "username")
-    lc  = leakcheck_check(username)
 
-    merged = merge_breach_names(xon or [], ll or [], lc or [])
+    console.print(f"[dim]🔍 LeakLookup...[/dim]")
+    ll = leaklookup_check(username, "username")
 
-    # kalau kosong — diam
-    if not merged:
-        return
+    console.print(f"[dim]🔍 LeakCheck...[/dim]")
+    lc = leakcheck_check(username)
+
+    merged = merge_breach_names(xon if xon else [], ll if ll else [], lc if lc else [])
 
     console.print()
-    total = len(merged)
-    console.print(Align.center(
-        Panel(
-            Align.center(Text(
-                f"⚠️  Username '{username}' ditemukan di {total} breach: {', '.join(merged)}",
-                style="bold red"
-            )),
-            border_style="red", padding=(1, 4), width=72
-        )
-    ))
+    if not merged:
+        console.print(Align.center(
+            Panel(
+                Align.center(Text(f"✅  Username '{username}' tidak ditemukan di breach manapun", style="bold green")),
+                border_style="green", padding=(1, 4), width=60
+            )
+        ))
+    else:
+        total = len(merged)
+        console.print(Align.center(
+            Panel(
+                Align.center(Text(f"⚠️  Username '{username}' ditemukan di {total} breach: {', '.join(merged)}", style="bold red")),
+                border_style="red", padding=(1, 4), width=72
+            )
+        ))
 
 # ── check phone ───────────────────────────────────────────────────────────────
 
 def check_phone(phone: str):
     normalized = format_phone_id(phone)
-    data = abstract_phone_check(normalized)
+    console.print(f"\n[dim]🔍 AbstractAPI Phone Intelligence ({normalized})...[/dim]")
 
-    # kalau gagal — diam, tidak tampilkan apa-apa
+    data = abstract_phone_check(normalized)
+    console.print()
+
     if not data:
+        console.print(Panel(
+            Text("⚠️  Gagal terhubung ke AbstractAPI. Cek koneksi atau API key.", style="bold red"),
+            border_style="red", padding=(1, 2)
+        ))
         return
 
-    console.print()
     table = Table(box=box.ROUNDED, border_style="bright_cyan",
                   header_style="bold cyan", show_lines=True, expand=True)
     table.add_column("Field", style="bold white", min_width=22)
@@ -350,6 +396,8 @@ def check_phone(phone: str):
             if len(breached_domains) > 8:
                 domains_text.append(f" +{len(breached_domains)-8} lagi", style="dim white")
             table.add_row("Domain Bocor", domains_text)
+    else:
+        table.add_row("Breach", Text("✅ Tidak ditemukan", style="bold green"))
 
     risk = data.get("phone_risk", {})
     if isinstance(risk, dict) and risk:
@@ -361,26 +409,34 @@ def check_phone(phone: str):
 # ── check password ────────────────────────────────────────────────────────────
 
 def check_password(password: str):
+    console.print(f"\n[dim]🔍 HIBP Pwned Passwords (k-anonymity)...[/dim]")
     count = hibp_password_check(password)
-
-    # gagal konek — diam
-    if count == -1:
-        return
-    # bersih — diam
-    if count == 0:
-        return
-
     console.print()
-    console.print(Align.center(
-        Panel(
-            Align.center(Text(
-                f"⚠️  Password ini muncul {count:,}x di breach yang diketahui!\n"
-                f"Segera ganti password ini di semua akun.",
-                style="bold red", justify="center"
-            )),
-            border_style="red", padding=(1, 4), width=72
-        )
-    ))
+
+    if count == -1:
+        console.print(Panel(
+            Text("⚠️  Gagal terhubung ke HIBP.", style="bold red"),
+            border_style="red", padding=(1, 2)
+        ))
+    elif count == 0:
+        console.print(Align.center(
+            Panel(
+                Align.center(Text("✅  Password tidak ditemukan di breach manapun", style="bold green")),
+                border_style="green", padding=(1, 4), width=60
+            )
+        ))
+    else:
+        console.print(Align.center(
+            Panel(
+                Align.center(Text(
+                    f"⚠️  Password ini muncul {count:,}x di breach yang diketahui!\n"
+                    f"Segera ganti password ini di semua akun.",
+                    style="bold red", justify="center"
+                )),
+                border_style="red", padding=(1, 4), width=72
+            )
+        ))
+
     console.print()
     console.print(Align.center(
         Text("🔒  Password tidak pernah dikirim utuh — hanya 5 karakter pertama hash SHA1", style="dim cyan")
@@ -418,13 +474,14 @@ def check_nik(nik: str):
     tahun_int  = int(tahun)
     tahun_full = str(2000 + tahun_int) if tahun_int <= 24 else str(1900 + tahun_int)
 
-    # lookup wilayah via kodenik — kalau gagal, diam (tidak tampilkan error)
+    console.print(f"[dim]🔍 Lookup wilayah via kodenik...[/dim]")
     wilayah = None
     try:
         wilayah = _kodenik_lookup(nik)
     except Exception:
         wilayah = None
 
+    # kalau kodenik gagal (exception), sembunyikan kegagalan — tetap lanjut tanpa baris wilayah
     table = Table(box=box.ROUNDED, border_style="bright_cyan",
                   header_style="bold cyan", show_lines=True, expand=True)
     table.add_column("Field", style="bold white", min_width=22)
@@ -432,11 +489,11 @@ def check_nik(nik: str):
 
     table.add_row("NIK", nik)
 
-    # hanya nama wilayah — kode prov/kab/kec dihapus
     if wilayah:
-        table.add_row("Provinsi",        Text(wilayah.get("nama_provinsi", "—"),  style="bold yellow"))
-        table.add_row("Kabupaten/Kota",  Text(wilayah.get("nama_kabkota", "—"),   style="yellow"))
-        table.add_row("Kecamatan",       Text(wilayah.get("nama_kecamatan", "—"), style="yellow"))
+        table.add_row("Provinsi",       Text(wilayah.get("nama_provinsi", "—"),  style="bold yellow"))
+        table.add_row("Kabupaten/Kota", Text(wilayah.get("nama_kabkota", "—"),   style="yellow"))
+        table.add_row("Kecamatan",      Text(wilayah.get("nama_kecamatan", "—"), style="yellow"))
+    # kode prov/kab/kec & blok error wilayah: DIHAPUS sesuai permintaan
 
     table.add_row("Tanggal Lahir", Text(f"{tgl_str} {bulan_str} {tahun_full}", style="bold white"))
     table.add_row("Jenis Kelamin", Text(jk, style="bold cyan"))

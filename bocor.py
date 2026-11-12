@@ -1,9 +1,11 @@
 # lang: Python, file: bocor.py, target: Python 3.8+
-# deps: pip install rich requests kodenik
+# deps: pip install -r requirements.txt
 # run: python bocor.py
 
 import hashlib
+import os
 import time
+import random
 import requests
 from kodenik import lookup_nik as _kodenik_lookup
 from rich.console import Console
@@ -16,9 +18,23 @@ from rich import box
 
 console = Console()
 
+# ── load .env manual (tanpa python-dotenv) ──────────────────────────────────
+def _load_env(path=".env"):
+    if not os.path.exists(path):
+        return
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+_load_env()
+
 # ── API KEYS ─────────────────────────────────────────────────────────────────
-LEAKLOOKUP_KEY   = "083fa6d594bb3954ce7fb3f7adfc6fe3"
-ABSTRACTAPI_KEY  = "c602e4705c3e4dbd8acbe35d10a40da7"
+LEAKLOOKUP_KEY   = os.getenv("LEAKLOOKUP_KEY", "")
+ABSTRACTAPI_KEY  = os.getenv("ABSTRACTAPI_KEY", "")
 
 ASCII_ART = """
 ███╗   ███╗██████╗ ██╗  ██╗ ██╗ ██╗  ███╗  ███╗       ██╗██████╗ 
@@ -30,6 +46,22 @@ ASCII_ART = """
 """
 
 COLORS = ["red", "yellow", "green", "cyan", "blue", "magenta"]
+
+# ── proxy pool ───────────────────────────────────────────────────────────────
+_PROXY_POOL = []
+
+def _load_proxies():
+    global _PROXY_POOL
+    try:
+        with open("proxies.txt") as f:
+            _PROXY_POOL = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+    except FileNotFoundError:
+        _PROXY_POOL = []
+
+def _random_proxy():
+    if not _PROXY_POOL:
+        return None
+    return random.choice(_PROXY_POOL)
 
 # ── banner ───────────────────────────────────────────────────────────────────
 
@@ -208,17 +240,15 @@ def format_phone_id(phone: str) -> str:
         phone = phone[1:]
     return phone
 
-# ── BPJS PASTI JKN (single attempt) ──────────────────────────────────────────
+# ── BPJS PASTI JKN ────────────────────────────────────────────────────────────
 
 def check_bpjs_pasti(nik: str, tgl_lahir_iso: str) -> dict:
-    """
-    nik: 16 digit
-    tgl_lahir_iso: YYYY-MM-DD
-    Returns {"status": "aktif"|"nonaktif"|"tidak_ada", "nama": str|None}
-    """
     result = {"status": "tidak_ada", "nama": None}
     try:
         s = requests.Session()
+        proxy = _random_proxy()
+        if proxy:
+            s.proxies = {"http": proxy, "https": proxy}
         s.headers.update({
             "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/124.0 Mobile Safari/537.36",
             "Accept": "application/json, text/plain, */*",
@@ -258,13 +288,7 @@ def check_bpjs_pasti(nik: str, tgl_lahir_iso: str) -> dict:
         pass
     return result
 
-# ── BPJS PASTI JKN (multi-year brute: tetap → +1 → −1) ──────────────────────
-
 def check_bpjs_pasti_multi(nik: str, tgl: str, bulan: str, tahun: int) -> dict:
-    """
-    Coba 3 variasi tahun: tetap, +1, -1.
-    Return dict dengan tambahan "tahun_ketemu" kalau status aktif/nonaktif.
-    """
     kandidat_tahun = [tahun, tahun + 1, tahun - 1]
     for i, th in enumerate(kandidat_tahun):
         tgl_iso = f"{th}-{bulan}-{tgl}"
@@ -358,7 +382,7 @@ def display_email_results(email: str, breach_names: list):
     tips.append("Ganti password di semua akun yang terdampak. Aktifkan 2FA.", style="white")
     console.print(Align.center(tips))
 
-# ── check email (multi-source) ────────────────────────────────────────────────
+# ── check email ───────────────────────────────────────────────────────────────
 
 def check_email(email: str):
     console.print(f"\n[dim]🔍 XposedOrNot...[/dim]")
@@ -382,7 +406,7 @@ def check_email(email: str):
 
     display_email_results(email, merged)
 
-# ── check username (multi-source) ─────────────────────────────────────────────
+# ── check username ────────────────────────────────────────────────────────────
 
 def check_username(username: str):
     console.print(f"\n[dim]🔍 XposedOrNot...[/dim]")
@@ -566,7 +590,6 @@ def check_nik(nik: str):
     table.add_row("Jenis Kelamin", Text(jk, style="bold cyan"))
     table.add_row("No. Urut", urut)
 
-    # ── BPJS PASTI JKN — brute tahun: tetap → +1 → −1 ──
     bpjs = check_bpjs_pasti_multi(nik, tgl_str, bulan, tahun_full)
 
     if bpjs["status"] in ("aktif", "nonaktif"):
@@ -609,6 +632,9 @@ def show_menu():
 
 def main():
     print_banner()
+    _load_proxies()
+    if _PROXY_POOL:
+        console.print(Align.center(Text(f"🌐  {len(_PROXY_POOL)} proxy dimuat dari proxies.txt\n", style="dim cyan")))
 
     console.print(Align.center(Text("⏳  Memuat breach database HIBP...", style="dim white")))
     load_hibp_metadata()
@@ -644,6 +670,8 @@ def main():
         console.print()
         input("[dim]Tekan Enter untuk lanjut...[/dim]")
         print_banner()
+        if _PROXY_POOL:
+            console.print(Align.center(Text(f"🌐  {len(_PROXY_POOL)} proxy dimuat\n", style="dim cyan")))
         console.print(Align.center(Text(f"✅  {len(_hibp_cache)} breach dimuat\n", style="dim green")))
 
 if __name__ == "__main__":

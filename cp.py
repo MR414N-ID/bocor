@@ -1,20 +1,26 @@
-# proxy_id.py — scrape + filter proxy Indonesia yang aktif DAN lolos BPJS
+# proxy_id.py — scrape + filter proxy 5 negara, aktif DAN lolos BPJS
 # deps: pip install requests
 # run: python proxy_id.py
 
+import os
 import random
 import threading
 import requests
 
-SOURCE_ID   = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/countries/ID/data.txt"
-SOURCE_HTTP = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt"
-OUT_FILE    = "proxies.txt"
+# 5 negara sekaligus
+COUNTRIES = ["ID", "SG", "MY", "US", "GB"]
+BASE_URL  = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/countries/{}/data.txt"
+
 TARGET      = 50
 TIMEOUT     = 6
 UA = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/124.0 Mobile Safari/537.36"
 
 TEST_ACTIVE = "https://httpbin.org/ip"
 TEST_BPJS   = "https://pasti.bpjs-kesehatan.go.id/cek"
+
+_checked = 0
+_total = 0
+_lock_counter = threading.Lock()
 
 def fetch_list(url: str) -> list:
     try:
@@ -31,8 +37,18 @@ def normalize(p: str) -> str:
         return "http://" + p
     return p
 
+def get_available_filename(base_name="proxies.txt") -> str:
+    if not os.path.exists(base_name):
+        return base_name
+    name, ext = os.path.splitext(base_name)
+    counter = 2
+    while True:
+        new_name = f"{name}{counter}{ext}"
+        if not os.path.exists(new_name):
+            return new_name
+        counter += 1
+
 def check_active(proxy: str) -> tuple:
-    """return (ok, ip_or_err)"""
     try:
         r = requests.get(
             TEST_ACTIVE,
@@ -53,7 +69,6 @@ def check_active(proxy: str) -> tuple:
         return False, type(e).__name__
 
 def check_bpjs(proxy: str) -> tuple:
-    """return (ok, status_or_err)"""
     try:
         r = requests.get(
             TEST_BPJS,
@@ -64,7 +79,6 @@ def check_bpjs(proxy: str) -> tuple:
                 "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
             },
         )
-        # BPJS suka balikin 403/503 kalau IP blacklist, 200 kalau lolos
         if r.status_code == 200:
             return True, "200"
         return False, f"http {r.status_code}"
@@ -78,16 +92,23 @@ def check_bpjs(proxy: str) -> tuple:
         return False, type(e).__name__
 
 def worker(proxy: str, results: list, lock: threading.Lock):
-    # step 1: aktif?
+    global _checked
     ok_active, info_active = check_active(proxy)
     if not ok_active:
         with lock:
+            _checked += 1
+            print(f"  [{_checked:>4}/{_total}] [✗] {proxy:<40} mati ({info_active})")
             results.append({"proxy": proxy, "ok": False, "stage": "aktif", "err": info_active, "ip": None})
         return
 
-    # step 2: lolos BPJS?
     ok_bpjs, info_bpjs = check_bpjs(proxy)
     with lock:
+        _checked += 1
+        if ok_bpjs:
+            print(f"  [{_checked:>4}/{_total}] [✓] {proxy:<40} exit: {info_active:<15} BPJS: lolos")
+        else:
+            print(f"  [{_checked:>4}/{_total}] [•] {proxy:<40} exit: {info_active:<15} BPJS: {info_bpjs}")
+            
         results.append({
             "proxy": proxy,
             "ok": ok_bpjs,
@@ -97,12 +118,17 @@ def worker(proxy: str, results: list, lock: threading.Lock):
         })
 
 def run_batch(candidates: list, target: int) -> list:
+    global _total
     random.shuffle(candidates)
+    _total = len(candidates)
+    
     results = []
     lock = threading.Lock()
+    
     for i in range(0, len(candidates), 50):
         good = [r for r in results if r["ok"]]
         if len(good) >= target:
+            print(f"\n[!] Target {target} proxy lolos tercapai, menghentikan sisa pencarian.")
             break
         batch = candidates[i:i + 50]
         threads = []
@@ -113,64 +139,64 @@ def run_batch(candidates: list, target: int) -> list:
             threads.append(t)
         for t in threads:
             t.join(timeout=TIMEOUT * 2 + 4)
+            
     return results
 
 def main():
-    print("[~] ambil proxy Indonesia dari Proxifly...")
-    id_raw = fetch_list(SOURCE_ID)
-    print(f"[+] {len(id_raw)} proxy ID ditemukan")
+    print(f"[~] ambil proxy dari {len(COUNTRIES)} negara ({', '.join(COUNTRIES)})...")
+    
+    raw_proxies = []
+    for cc in COUNTRIES:
+        url = BASE_URL.format(cc)
+        print(f"    - Fetching {cc}...", end="", flush=True)
+        data = fetch_list(url)
+        print(f" dapat {len(data)}")
+        raw_proxies.extend(data)
 
-    if not id_raw:
-        print("[!] list ID kosong, fallback ke HTTP global...")
-        id_raw = fetch_list(SOURCE_HTTP)[:500]
-        print(f"[+] {len(id_raw)} kandidat global")
+    print(f"\n[+] Total {len(raw_proxies)} proxy terkumpul dari semua negara")
 
-    # filter hanya http:// (BPJS pakai http/https, bukan socks)
-    candidates = list({normalize(p) for p in id_raw if p.startswith("http")})
-    # buang duplikat & yang bukan format ip:port
+    candidates = list({normalize(p) for p in raw_proxies if p.startswith("http")})
     candidates = [c for c in candidates if c.count(":") >= 2]
 
     if not candidates:
-        print("[!] tidak ada kandidat http")
+        print("[!] Tidak ada kandidat yang valid.")
         return
 
-    print(f"[~] cek {len(candidates)} kandidat: aktif + lolos BPJS...\n")
+    print(f"[~] Mulai cek {len(candidates)} kandidat (aktif + lolos BPJS)...\n")
     results = run_batch(candidates, TARGET)
 
-    # urutkan: yang lolos BPJS di atas
-    results.sort(key=lambda x: (not x["ok"], x["proxy"]))
-
-    aktif = 0
-    lolos = 0
-    for r in results:
-        if r["ok"]:
-            lolos += 1
-            print(f"  [✓] {r['proxy']:<42} exit: {r['ip']:<18} BPJS: lolos")
-        elif r["stage"] == "bpjs-gagal":
-            aktif += 1
-            print(f"  [•] {r['proxy']:<42} exit: {r['ip']:<18} BPJS: {r['err']}")
-        else:
-            print(f"  [✗] {r['proxy']:<42} mati ({r['err']})")
-
-    print(f"\n[+] ringkasan:")
-    print(f"    aktif       : {aktif + lolos}/{len(results)}")
-    print(f"    lolos BPJS  : {lolos}/{len(results)}")
-
-    if lolos:
-        with open(OUT_FILE, "w") as f:
-            for r in results:
-                if r["ok"]:
-                    f.write(r["proxy"] + "\n")
-        print(f"[+] {lolos} proxy lolos BPJS disimpan ke {OUT_FILE}")
+    berhasil = [r for r in results if r["ok"]]
+    aktif_gagal_bpjs = [r for r in results if r["stage"] == "bpjs-gagal"]
+    
+    print("\n" + "-" * 50)
+    print(f"LIST YANG BERHASIL LOLOS BPJS ({len(berhasil)} Proxy)")
+    print("-" * 50)
+    
+    if berhasil:
+        for r in berhasil:
+            print(f"  {r['proxy']}")
     else:
-        print("[!] nol proxy lolos BPJS—coba beberapa menit lagi")
-        # fallback: simpan yang aktif aja biar tetap ada
-        if aktif:
-            with open(OUT_FILE, "w") as f:
-                for r in results:
-                    if r["stage"] == "bpjs-gagal":
-                        f.write(r["proxy"] + "\n")
-            print(f"[~] fallback: {aktif} proxy aktif (tanpa filter BPJS) disimpan")
+        print("  Tidak ada proxy yang lolos BPJS.")
+
+    # Konfirmasi Save
+    if berhasil:
+        print() 
+        pilihan = input("[?] Simpan proxy ini ke file? (y/t): ").strip().lower()
+        
+        if pilihan == 'y':
+            target_file = get_available_filename("proxies.txt")
+            with open(target_file, "w") as f:
+                for r in berhasil:
+                    f.write(r["proxy"] + "\n")
+            print(f"[+] Berhasil disimpan ke {target_file}")
+        else:
+            print("[-] Dibatalkan, proxy tidak disimpan.")
+        
+    print(f"\n[+] Ringkasan:")
+    print(f"    - Total dicek      : {_checked}")
+    print(f"    - Mati             : {len(results) - len(berhasil) - len(aktif_gagal_bpjs)}")
+    print(f"    - Aktif (Gagal BPJS): {len(aktif_gagal_bpjs)}")
+    print(f"    - Lolos BPJS       : {len(berhasil)}")
 
 if __name__ == "__main__":
     main()

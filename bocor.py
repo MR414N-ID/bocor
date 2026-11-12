@@ -1,11 +1,12 @@
 # lang: Python, file: bocor.py, target: Python 3.8+
-# deps: pip install -r requirements.txt
+# deps: pip install rich requests kodenik
 # run: python bocor.py
 
 import hashlib
 import os
 import time
 import random
+import subprocess
 import requests
 from kodenik import lookup_nik as _kodenik_lookup
 from rich.console import Console
@@ -18,7 +19,7 @@ from rich import box
 
 console = Console()
 
-# ── load .env manual (tanpa python-dotenv) ──────────────────────────────────
+# ── load .env manual ────────────────────────────────────────────────────────
 def _load_env(path=".env"):
     if not os.path.exists(path):
         return
@@ -32,7 +33,6 @@ def _load_env(path=".env"):
 
 _load_env()
 
-# ── API KEYS ─────────────────────────────────────────────────────────────────
 LEAKLOOKUP_KEY   = os.getenv("LEAKLOOKUP_KEY", "")
 ABSTRACTAPI_KEY  = os.getenv("ABSTRACTAPI_KEY", "")
 
@@ -50,18 +50,61 @@ COLORS = ["red", "yellow", "green", "cyan", "blue", "magenta"]
 # ── proxy pool ───────────────────────────────────────────────────────────────
 _PROXY_POOL = []
 
-def _load_proxies():
+def _load_proxies_from_file(filename):
     global _PROXY_POOL
     try:
-        with open("proxies.txt") as f:
+        with open(filename) as f:
             _PROXY_POOL = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+        return True
     except FileNotFoundError:
-        _PROXY_POOL = []
+        return False
 
 def _random_proxy():
     if not _PROXY_POOL:
         return None
     return random.choice(_PROXY_POOL)
+
+def setup_proxy():
+    """Menu inisialisasi proxy di awal"""
+    console.print(Panel(
+        Text("Pilih Mode Koneksi:", style="bold cyan"),
+        border_style="cyan", padding=(1, 2), width=50
+    ))
+    console.print("  [1] Otomatis (Scrape via proxy_id.py)")
+    console.print("  [2] Dari file .txt (manual)")
+    console.print("  [3] Tanpa Proxy\n")
+    
+    pilihan = Prompt.ask("[bold white]Pilih mode (1/2/3)[/bold white]", choices=["1", "2", "3"], default="3")
+    
+    if pilihan == "1":
+        console.print("\n[dim]Menjalankan proxy_id.py...[/dim]")
+        try:
+            subprocess.run(["python", "proxy_id.py"])
+        except Exception as e:
+            console.print(f"[red]Gagal menjalankan: {e}[/red]")
+        
+        console.print("\n[dim]Mencari file proxy yang dihasilkan...[/dim]")
+        # Cari file proxies*.txt terbaru
+        files = [f for f in os.listdir('.') if f.startswith('proxies') and f.endswith('.txt')]
+        if files:
+            files.sort(key=os.path.getmtime, reverse=True)
+            latest = files[0]
+            if _load_proxies_from_file(latest):
+                console.print(f"[green]✅ {len(_PROXY_POOL)} proxy dimuat dari {latest}[/green]")
+        else:
+            console.print("[yellow]⚠️ Tidak ada file proxies.txt ditemukan.[/yellow]")
+            
+    elif pilihan == "2":
+        fname = Prompt.ask("[bold white]Masukkan nama file proxy[/bold white]", default="proxies.txt")
+        if _load_proxies_from_file(fname):
+            console.print(f"[green]✅ {len(_PROXY_POOL)} proxy dimuat dari {fname}[/green]")
+        else:
+            console.print(f"[red]❌ File '{fname}' tidak ditemukan. Lanjut tanpa proxy.[/red]")
+            
+    else:
+        console.print("[dim]Lanjut tanpa proxy.[/dim]")
+    
+    time.sleep(1)
 
 # ── banner ───────────────────────────────────────────────────────────────────
 
@@ -249,6 +292,7 @@ def check_bpjs_pasti(nik: str, tgl_lahir_iso: str) -> dict:
         proxy = _random_proxy()
         if proxy:
             s.proxies = {"http": proxy, "https": proxy}
+        
         s.headers.update({
             "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/124.0 Mobile Safari/537.36",
             "Accept": "application/json, text/plain, */*",
@@ -632,10 +676,10 @@ def show_menu():
 
 def main():
     print_banner()
-    _load_proxies()
-    if _PROXY_POOL:
-        console.print(Align.center(Text(f"🌐  {len(_PROXY_POOL)} proxy dimuat dari proxies.txt\n", style="dim cyan")))
-
+    
+    # Panggil menu setup proxy
+    setup_proxy()
+    
     console.print(Align.center(Text("⏳  Memuat breach database HIBP...", style="dim white")))
     load_hibp_metadata()
     console.print(Align.center(Text(f"✅  {len(_hibp_cache)} breach dimuat\n", style="dim green")))
